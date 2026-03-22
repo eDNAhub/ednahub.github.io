@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="nl" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>eDNAhub — Pipeline Kennisbank</title>
+
+<!--
+  ═══════════════════════════════════════════════════════════
+  eDNAhub · Publieke website
+  Bestand: 2_website.html
+  ═══════════════════════════════════════════════════════════
+
+  CONFIGURATIE:
+    SUPABASE_URL → Supabase → Settings → API → Project URL
+    SUPABASE_KEY → Supabase → Settings → API → anon/public key
+
+  MOBIELE OPTIMALISATIES IN DEZE VERSIE:
+    - Hamburger menu  : navigatielinks verbergen achter ≡ icoontje
+                        op schermen smaller dan 768px
+    - Mobiele filters : filters klikbaar als schuiflade onderaan
+                        op mobiel in plaats van vaste sidebar
+    - Kaarten         : parameter-grid scrollt horizontaal op mobiel
+    - Vergelijkingstabel: scrollbaar horizontaal op kleine schermen
+    - Kaart           : legenda verbergt op kleine schermen
+    - Touch targets   : alle knoppen minimaal 44×44px (Apple richtlijn)
+
+  SUPABASE VISITS TABEL (eenmalig uitvoeren):
+    create table public.visits (
+      id bigserial primary key,
+      visited_at timestamptz default now()
+    );
+    alter table public.visits enable row level security;
+    create policy "insert" on public.visits for insert with check (true);
+    create policy "select" on public.visits for select using (true);
+  ═══════════════════════════════════════════════════════════
+-->
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;1,9..144,300&family=DM+Sans:wght@300;400;500&display=swap');
+
+/* ── Thema variabelen ── */
+:root {
+  --teal-800:#085041; --teal-600:#0F6E56; --teal-400:#1D9E75;
+  --teal-100:#9FE1CB; --teal-50:#E1F5EE;
+  --gray-900:#2C2C2A; --gray-600:#5F5E5A; --gray-400:#888780;
+  --gray-100:#D3D1C7; --gray-50:#F1EFE8;
+  --blue-800:#0C447C; --blue-600:#185FA5; --blue-50:#E6F1FB;
+  --amber-600:#854F0B; --amber-50:#FAEEDA;
+  --bg:#FAFAF8; --surface:#FFFFFF; --border:rgba(0,0,0,0.10);
+  --text:#2C2C2A; --muted:#5F5E5A; --hint:#888780;
+  --nav-h: 56px; /* navigatiehoogte als variabele voor hergebruik */
+}
+[data-theme="dark"] {
+  --bg:#1a1a18; --surface:#242422; --border:rgba(255,255,255,0.10);
+  --text:#E8E6E0; --muted:#9A9890; --hint:#6A6860;
+  --teal-50:rgba(15,110,86,0.18); --teal-800:#5DCAA5;
+  --blue-50:rgba(24,95,165,0.18);  --blue-800:#85B7EB;
+  --amber-50:rgba(133,79,11,0.18); --amber-600:#EF9F27;
+  --gray-50:rgba(255,255,255,0.05); --gray-900:#E8E6E0;
+}
+
+*, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+html { scroll-behavior:smooth; }
+body { font-family:'DM Sans',sans-serif; font-size:14px; background:var(--bg); color:var(--text); line-height:1.6; transition:background 0.2s,color 0.2s; -webkit-text-size-adjust:100%; }
+
+/* ══════════════════════════════════════════════════════════
+   NAVIGATIE — desktop en mobiel
+   Desktop: logo + links + teller + dark mode + knop naast elkaar
+   Mobiel:  logo + dark mode + hamburger icoontje
+            Links verschijnen in een dropdown onder de nav
+══════════════════════════════════════════════════════════ */
+nav {
+  position:sticky; top:0; z-index:300;
+  display:flex; align-items:center; padding:0 20px; height:var(--nav-h);
+  background:var(--surface); border-bottom:0.5px solid var(--border);
+  backdrop-filter:blur(12px);
+}
+[data-theme="dark"] nav { background:rgba(26,26,24,0.95); }
+
+.logo { font-family:'Fraunces',serif; font-size:18px; font-weight:500; color:var(--teal-600); text-decoration:none; white-space:nowrap; margin-right:24px; }
+.logo span { color:var(--teal-400); }
+
+/* Desktop navigatielinks */
+.nav-links { display:flex; gap:2px; flex:1; }
+.nav-link { padding:6px 12px; border-radius:6px; font-size:13px; color:var(--muted); cursor:pointer; border:none; background:none; transition:background 0.12s; min-height:44px; display:flex; align-items:center; }
+.nav-link:hover { background:var(--gray-50); color:var(--text); }
+.nav-link.active { background:var(--teal-50); color:var(--teal-800); font-weight:500; }
+
+.nav-right { display:flex; align-items:center; gap:8px; }
+
+/* Bezoekersteller */
+.visit-badge { display:flex; align-items:center; gap:5px; font-family:'DM Mono',monospace; font-size:11px; color:var(--hint); padding:4px 10px; border-radius:20px; border:0.5px solid var(--border); background:var(--surface); white-space:nowrap; }
+.visit-dot { width:6px; height:6px; border-radius:50%; background:var(--teal-400); flex-shrink:0; }
+
+/* Dark mode knop — altijd zichtbaar, ook op mobiel */
+.theme-btn { width:44px; height:44px; border-radius:50%; border:0.5px solid var(--border); background:var(--surface); cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; transition:background 0.12s; flex-shrink:0; }
+.theme-btn:hover { background:var(--gray-50); }
+
+/* ── Hamburger knop — alleen zichtbaar op mobiel ── */
+.hamburger {
+  display:none; /* verborgen op desktop */
+  flex-direction:column; justify-content:center; align-items:center; gap:5px;
+  width:44px; height:44px; border:0.5px solid var(--border);
+  border-radius:8px; background:var(--surface); cursor:pointer;
+  flex-shrink:0;
+}
+.hamburger span {
+  display:block; width:18px; height:2px;
+  background:var(--text); border-radius:2px;
+  transition:transform 0.2s, opacity 0.2s;
+}
+/* Animatie: drie strepen → kruis als menu open is */
+.hamburger.open span:nth-child(1) { transform:translateY(7px) rotate(45deg); }
+.hamburger.open span:nth-child(2) { opacity:0; }
+.hamburger.open span:nth-child(3) { transform:translateY(-7px) rotate(-45deg); }
+
+/* ── Mobiel dropdown menu ── */
+.mobile-menu {
+  display:none; /* standaard verborgen */
+  position:fixed; top:var(--nav-h); left:0; right:0; z-index:299;
+  background:var(--surface); border-bottom:0.5px solid var(--border);
+  padding:8px 12px 16px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.12);
+}
+.mobile-menu.open { display:block; }
+.mobile-menu .nav-link { width:100%; justify-content:flex-start; font-size:15px; padding:12px 14px; border-radius:8px; margin-bottom:2px; }
+.mobile-menu .m-divider { height:0.5px; background:var(--border); margin:8px 0; }
+.mobile-menu .m-meta { display:flex; align-items:center; justify-content:space-between; padding:8px 14px; }
+
+/* ── Overlay achter menu (dimmen van de rest) ── */
+.overlay { display:none; position:fixed; inset:0; z-index:298; background:rgba(0,0,0,0.3); }
+.overlay.open { display:block; }
+
+.btn { display:inline-flex; align-items:center; gap:6px; padding:10px 16px; border-radius:6px; font-size:13px; font-weight:500; cursor:pointer; border:none; transition:background 0.12s; min-height:44px; }
+.btn-primary { background:var(--teal-600); color:#fff; }
+.btn-primary:hover { background:var(--teal-800); }
+.btn-outline { background:transparent; color:var(--muted); border:0.5px solid var(--border); }
+.btn-outline:hover { background:var(--gray-50); }
+
+.pill { font-family:'DM Mono',monospace; font-size:10px; padding:3px 8px; border-radius:20px; font-weight:500; }
+.pill-dada2   { background:var(--teal-50);  color:var(--teal-800); }
+.pill-vsearch { background:var(--blue-50);  color:var(--blue-800); }
+.pill-anacapa { background:var(--amber-50); color:var(--amber-600); }
+.pill-marker  { background:var(--gray-50);  color:var(--text); border:0.5px solid var(--border); }
+
+.page { display:none; }
+.page.active { display:block; }
+.state-msg { text-align:center; padding:48px 24px; color:var(--muted); font-size:13px; }
+.spinner { display:inline-block; width:20px; height:20px; border:2px solid var(--teal-100); border-top-color:var(--teal-400); border-radius:50%; animation:spin 0.8s linear infinite; margin-bottom:8px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ══════════════════════════════════════════════════════════
+   HOMEPAGE
+══════════════════════════════════════════════════════════ */
+.hero { max-width:900px; margin:0 auto; padding:60px 24px 44px; text-align:center; }
+.hero-tag { display:inline-block; background:var(--teal-50); color:var(--teal-800); font-family:'DM Mono',monospace; font-size:11px; padding:4px 12px; border-radius:20px; margin-bottom:20px; }
+.hero h1 { font-family:'Fraunces',serif; font-size:40px; font-weight:300; line-height:1.2; margin-bottom:16px; }
+.hero h1 em { font-style:italic; color:var(--teal-600); }
+.hero p { font-size:15px; color:var(--muted); max-width:500px; margin:0 auto 28px; }
+.hero-search { display:flex; gap:8px; max-width:460px; margin:0 auto; }
+.hero-search input { flex:1; padding:12px 16px; border:0.5px solid var(--border); border-radius:8px; font-size:14px; outline:none; background:var(--surface); color:var(--text); min-height:44px; }
+.hero-search input:focus { border-color:var(--teal-400); }
+
+.stats-bar { display:flex; justify-content:center; gap:32px; padding:24px; border-top:0.5px solid var(--border); max-width:900px; margin:0 auto; flex-wrap:wrap; }
+.stat .n { font-family:'Fraunces',serif; font-size:28px; font-weight:500; color:var(--teal-600); display:block; }
+.stat .l { font-size:11px; color:var(--hint); font-family:'DM Mono',monospace; }
+
+.feature-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--border); border-top:0.5px solid var(--border); margin-top:32px; }
+.feature-card { background:var(--surface); padding:24px 28px; cursor:pointer; transition:background 0.12s; }
+.feature-card:hover, .feature-card:active { background:var(--teal-50); }
+.feature-card h3 { font-size:14px; font-weight:500; margin-bottom:6px; }
+.feature-card p { font-size:12px; color:var(--muted); line-height:1.5; }
+.feature-card .link { font-size:11px; color:var(--teal-600); font-family:'DM Mono',monospace; margin-top:10px; display:block; }
+
+/* ══════════════════════════════════════════════════════════
+   STUDIES — desktop layout
+══════════════════════════════════════════════════════════ */
+.two-col { display:flex; min-height:calc(100vh - var(--nav-h)); }
+
+/* Desktop sidebar met filters */
+.sidebar { width:220px; flex-shrink:0; border-right:0.5px solid var(--border); padding:20px 14px; position:sticky; top:var(--nav-h); height:calc(100vh - var(--nav-h)); overflow-y:auto; background:var(--surface); }
+.sidebar h4 { font-size:10px; font-weight:500; color:var(--hint); font-family:'DM Mono',monospace; text-transform:uppercase; letter-spacing:0.5px; margin:16px 0 8px; }
+.sidebar h4:first-child { margin-top:0; }
+.filter-item { display:flex; align-items:center; gap:8px; padding:8px; border-radius:6px; font-size:12px; color:var(--muted); cursor:pointer; transition:background 0.1s; min-height:36px; }
+.filter-item:hover { background:var(--gray-50); }
+.filter-item.active { background:var(--teal-50); color:var(--teal-800); font-weight:500; }
+.dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.fcount { margin-left:auto; font-family:'DM Mono',monospace; font-size:10px; color:var(--hint); }
+
+/* ── Mobiele filterbalk (vervangt sidebar op mobiel) ──
+   Horizontaal scrollbare rij van filterknoppen bovenaan
+   de studiepagina — gangbaar patroon op mobiele apps
+   (vergelijk bijv. Google Maps categoriefilters)
+── */
+.mobile-filters {
+  display:none; /* alleen zichtbaar op mobiel */
+  overflow-x:auto; padding:10px 16px; gap:8px;
+  border-bottom:0.5px solid var(--border);
+  background:var(--surface);
+  -webkit-overflow-scrolling:touch; /* soepel scrollen op iOS */
+  scrollbar-width:none; /* scroll indicator verbergen */
+}
+.mobile-filters::-webkit-scrollbar { display:none; }
+.mobile-filters .filter-chip {
+  display:inline-flex; align-items:center; gap:5px;
+  padding:7px 12px; border-radius:20px; font-size:12px;
+  border:0.5px solid var(--border); background:var(--surface);
+  color:var(--muted); cursor:pointer; white-space:nowrap;
+  min-height:36px; transition:background 0.1s;
+}
+.mobile-filters .filter-chip.active { background:var(--teal-50); color:var(--teal-800); border-color:var(--teal-400); font-weight:500; }
+
+.main { flex:1; padding:16px 20px; min-width:0; /* voorkomt overflow */ }
+.main-header { display:flex; align-items:center; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
+.main-header h2 { font-size:15px; font-weight:500; flex:1; }
+.result-count { font-family:'DM Mono',monospace; font-size:12px; color:var(--muted); }
+select.sort { font-size:12px; padding:8px 10px; border:0.5px solid var(--border); border-radius:6px; background:var(--surface); color:var(--muted); cursor:pointer; min-height:36px; }
+
+.search-input { width:100%; padding:10px 14px; border:0.5px solid var(--border); border-radius:8px; font-size:14px; margin-bottom:12px; outline:none; background:var(--surface); color:var(--text); min-height:44px; }
+.search-input:focus { border-color:var(--teal-400); }
+
+/* Study kaarten */
+.study-card { border:0.5px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:10px; background:var(--surface); transition:border-color 0.15s; }
+.study-card:hover { border-color:var(--teal-400); }
+.card-top { display:flex; align-items:flex-start; gap:10px; margin-bottom:8px; }
+.card-meta { flex:1; min-width:0; /* voorkomt tekst-overflow */ }
+.card-title { font-size:14px; font-weight:500; line-height:1.4; margin-bottom:3px; }
+.card-authors { font-size:11px; color:var(--muted); }
+.card-badges { display:flex; gap:5px; flex-wrap:wrap; flex-shrink:0; }
+
+/* Parameter grid — horizontaal scrollbaar op mobiel */
+.params-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:8px 0; }
+.params { display:flex; gap:20px; padding:10px 14px; background:var(--bg); border-radius:6px; width:max-content; min-width:100%; }
+.param { display:flex; flex-direction:column; gap:2px; }
+.param-label { font-size:10px; color:var(--hint); font-family:'DM Mono',monospace; white-space:nowrap; }
+.param-val { font-size:13px; font-weight:500; font-family:'DM Mono',monospace; color:var(--teal-800); white-space:nowrap; }
+
+.card-tags { display:flex; gap:5px; flex-wrap:wrap; margin-top:8px; }
+.tag { font-size:10px; padding:3px 8px; border-radius:4px; background:var(--gray-50); color:var(--muted); border:0.5px solid var(--border); }
+.tag-eco    { background:var(--teal-50);  color:var(--teal-800);  border-color:rgba(15,110,86,0.2); }
+.tag-marker { background:var(--blue-50);  color:var(--blue-800);  border-color:rgba(24,95,165,0.2); }
+.tag-region { background:var(--gray-50);  color:var(--muted); }
+.tag-doi    { color:var(--teal-600) !important; text-decoration:none; }
+
+/* ══════════════════════════════════════════════════════════
+   KAART
+══════════════════════════════════════════════════════════ */
+.map-wrap { display:flex; flex-direction:column; height:calc(100vh - var(--nav-h)); }
+.map-bar { padding:10px 20px; border-bottom:0.5px solid var(--border); background:var(--surface); display:flex; align-items:center; gap:12px; flex-shrink:0; flex-wrap:wrap; }
+.map-bar h2 { font-size:15px; font-weight:500; flex:1; }
+.map-bar .count { font-size:12px; color:var(--muted); font-family:'DM Mono',monospace; }
+.legend { display:flex; gap:12px; flex-wrap:wrap; }
+.leg { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
+.leg-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+#map { flex:1; }
+
+.leaflet-popup-content-wrapper { background:var(--surface); color:var(--text); border-radius:8px; border:0.5px solid var(--border); box-shadow:0 4px 16px rgba(0,0,0,0.15); font-family:'DM Sans',sans-serif; }
+.leaflet-popup-tip { background:var(--surface); }
+.popup-title { font-size:13px; font-weight:500; margin-bottom:4px; line-height:1.4; }
+.popup-meta  { font-size:11px; color:var(--muted); margin-bottom:6px; }
+.popup-params { font-family:'DM Mono',monospace; font-size:11px; color:var(--teal-800); }
+.popup-doi { font-size:11px; color:var(--teal-600); text-decoration:none; display:block; margin-top:6px; }
+
+/* ══════════════════════════════════════════════════════════
+   VERGELIJKINGSTOOL
+   Tabel scrollt horizontaal op mobiel in plaats van
+   afgekneden te worden — standaard aanpak voor tabellen
+══════════════════════════════════════════════════════════ */
+.compare-wrap { max-width:820px; margin:0 auto; padding:24px 16px; }
+.compare-wrap h2 { font-size:16px; font-weight:500; margin-bottom:6px; }
+.compare-wrap .sub { font-size:13px; color:var(--muted); margin-bottom:20px; }
+.filter-row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; padding:14px; background:var(--surface); border:0.5px solid var(--border); border-radius:10px; margin-bottom:16px; }
+.filter-row .field { display:flex; flex-direction:column; gap:5px; flex:1; min-width:140px; }
+.filter-row label { font-size:10px; color:var(--hint); font-family:'DM Mono',monospace; text-transform:uppercase; }
+.filter-row select { font-size:13px; padding:8px 10px; border:0.5px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); min-height:44px; width:100%; }
+
+.stats-wrap { background:var(--surface); border:0.5px solid var(--border); border-radius:10px; overflow:hidden; }
+.stats-meta { padding:10px 16px; background:var(--bg); border-bottom:0.5px solid var(--border); font-size:11px; color:var(--muted); font-family:'DM Mono',monospace; }
+/* Wrapper die horizontaal scrollen mogelijk maakt op mobiel */
+.table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.stats-table { width:100%; border-collapse:collapse; font-size:13px; min-width:480px; }
+.stats-table th { text-align:left; padding:10px 14px; border-bottom:0.5px solid var(--border); font-size:10px; font-weight:500; color:var(--hint); font-family:'DM Mono',monospace; text-transform:uppercase; letter-spacing:0.4px; white-space:nowrap; }
+.stats-table td { padding:10px 14px; border-bottom:0.5px solid var(--bg); white-space:nowrap; }
+.stats-table tr:last-child td { border-bottom:none; }
+.stats-table tr:hover td { background:var(--bg); }
+.td-name { font-weight:500; white-space:normal !important; } /* parameternaam mag wrappen */
+.td-val { font-family:'DM Mono',monospace; color:var(--teal-800); font-weight:500; }
+.avg-badge { display:inline-block; background:var(--teal-50); color:var(--teal-800); border-radius:4px; padding:2px 6px; font-size:11px; font-family:'DM Mono',monospace; }
+
+/* ══════════════════════════════════════════════════════════
+   MOBIELE MEDIA QUERIES
+   Alles hieronder overschrijft de desktop stijlen
+   voor schermen smaller dan 768px (typisch telefoon)
+══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+  /* Nav: verberg desktop links en teller, toon hamburger */
+  .nav-links   { display:none; }
+  .visit-badge { display:none; }
+  .hamburger   { display:flex; }
+
+  /* Logo iets kleiner */
+  .logo { font-size:16px; margin-right:auto; }
+
+  /* Hero sectie smaller */
+  .hero { padding:40px 20px 32px; }
+  .hero h1 { font-size:28px; }
+  .hero p { font-size:14px; }
+  .hero-search { flex-direction:column; }
+  .hero-search input,
+  .hero-search .btn { width:100%; }
+
+  /* Stats in twee kolommen */
+  .stats-bar { gap:0; padding:0; display:grid; grid-template-columns:1fr 1fr; }
+  .stat { padding:16px; border-bottom:0.5px solid var(--border); text-align:center; }
+  .stat:nth-child(odd) { border-right:0.5px solid var(--border); }
+
+  /* Feature grid: één kolom */
+  .feature-grid { grid-template-columns:1fr; }
+  .feature-card { padding:20px; }
+
+  /* Studies: verberg desktop sidebar, toon mobiele filterbalk */
+  .two-col { flex-direction:column; }
+  .sidebar { display:none; }
+  .mobile-filters { display:flex; }
+  .main { padding:12px 16px; }
+
+  /* Kaarten: badges onder de titel in plaats van naast */
+  .card-top { flex-direction:column; gap:6px; }
+  .card-badges { flex-direction:row; }
+
+  /* Kaart pagina: legenda verbergen om ruimte te besparen */
+  .legend { display:none; }
+  .map-bar { padding:10px 16px; }
+
+  /* Vergelijkingstool filters: elk veld volledige breedte */
+  .filter-row { gap:8px; }
+  .filter-row .field { min-width:100%; }
+}
+
+@media (max-width: 400px) {
+  /* Kleine telefoons: nog compacter */
+  .hero h1 { font-size:24px; }
+  .pill { font-size:9px; padding:2px 6px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════
+     NAVIGATIE
+══════════════════════════════════════════════════════════ -->
+<nav>
+  <a class="logo" href="#" onclick="showPage('home')">eDNA<span>hub</span></a>
+
+  <!-- Desktop links (verborgen op mobiel via CSS) -->
+  <div class="nav-links">
+    <button class="nav-link" data-page="home"    onclick="showPage('home')">Overzicht</button>
+    <button class="nav-link" data-page="studies" onclick="showPage('studies')">Studies</button>
+    <button class="nav-link" data-page="map"     onclick="showPage('map')">Kaart</button>
+    <button class="nav-link" data-page="compare" onclick="showPage('compare')">Vergelijk</button>
+  </div>
+
+  <div class="nav-right">
+    <!-- Bezoekersteller (verborgen op mobiel) -->
+    <div class="visit-badge" title="Totaal paginabezoeken">
+      <span class="visit-dot"></span>
+      <span id="visit-count">—</span> bezoeken
+    </div>
+
+    <!-- Dark mode — altijd zichtbaar -->
+    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Licht/donker thema">🌙</button>
+
+    <!-- Paper toevoegen knop verwijderd — beheer gebeurt lokaal via 3_add_paper.html -->
+
+    <!-- Hamburger knop (alleen mobiel) -->
+    <button class="hamburger" id="hamburger" onclick="toggleMenu()" aria-label="Menu openen">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</nav>
+
+<!-- Dimoverlay achter mobiel menu -->
+<div class="overlay" id="overlay" onclick="closeMenu()"></div>
+
+<!-- Mobiel dropdown menu -->
+<div class="mobile-menu" id="mobile-menu">
+  <button class="nav-link" data-page="home"    onclick="showPage('home');closeMenu()">Overzicht</button>
+  <button class="nav-link" data-page="studies" onclick="showPage('studies');closeMenu()">Studies</button>
+  <button class="nav-link" data-page="map"     onclick="showPage('map');closeMenu()">Kaart</button>
+  <button class="nav-link" data-page="compare" onclick="showPage('compare');closeMenu()">Vergelijk</button>
+  <div class="m-divider"></div>
+  <div class="m-meta">
+    <div class="visit-badge"><span class="visit-dot"></span><span id="visit-count-mobile">—</span> bezoeken</div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════
+     HOMEPAGE
+══════════════════════════════════════════════════════════ -->
+<div class="page active" id="page-home">
+  <div class="hero">
+    <span class="hero-tag">eDNA Metabarcoding · Kennisbank</span>
+    <h1>eDNA literatuur,<br><em>gedeeld door de gemeenschap.</em></h1>
+    <p>Alle gepubliceerde eDNA metabarcoding studies in aquatische en marine systemen — doorzoekbaar op ecosysteem, organisme en marker. Voor een deel ook pipeline-parameters beschikbaar.</p>
+    <div class="hero-search">
+      <input type="text" id="hero-q" placeholder="Zoek op primer, ecosysteem, doelgroep..." />
+      <button class="btn btn-primary" onclick="doSearch()">Zoeken</button>
+    </div>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat"><span class="n" id="stat-studies">—</span><span class="l">studies</span></div>
+    <div class="stat"><span class="n" id="stat-params">—</span><span class="l">met parameters</span></div>
+    <div class="stat"><span class="n" id="stat-regions">—</span><span class="l">regio's</span></div>
+  </div>
+
+  <div class="feature-grid">
+    <div class="feature-card" onclick="showPage('studies')">
+      <h3>Studies doorzoeken</h3>
+      <p>Vind studies op ecosysteem, primer en platform. Bekijk exacte instellingen.</p>
+      <span class="link">Alle studies →</span>
+    </div>
+    <div class="feature-card" onclick="showPage('map')">
+      <h3>Studielocaties</h3>
+      <p>Bekijk op een interactieve kaart waar studies zijn uitgevoerd wereldwijd.</p>
+      <span class="link">Kaart openen →</span>
+    </div>
+    <div class="feature-card" onclick="showPage('compare')">
+      <h3>Parameters vergelijken</h3>
+      <p>Zie de statistische verdeling van truncLen en maxEE over vergelijkbare studies.</p>
+      <span class="link">Vergelijkingstool →</span>
+    </div>
+    <div class="feature-card" onclick="showPage('compare')">
+      <h3>Parameters vergelijken</h3>
+      <p>Zie welke truncLen en maxEE waarden het meest worden gebruikt in vergelijkbare studies.</p>
+      <span class="link">Vergelijkingstool →</span>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════
+     STUDIES
+══════════════════════════════════════════════════════════ -->
+<div class="page" id="page-studies">
+
+  <!-- Mobiele horizontale filterbalk (vervangt de sidebar) -->
+  <div class="mobile-filters" id="mobile-filters"></div>
+
+  <div class="two-col">
+    <!-- Desktop sidebar (verborgen op mobiel) -->
+    <div class="sidebar">
+      <h4>Pipeline</h4>
+      <div id="sidebar-pipeline-items"></div>
+      <h4>Ecosysteem</h4>
+      <div class="filter-item active" data-f="ecosystem" data-v="all"        onclick="setFilter(this)">Alle</div>
+      <div class="filter-item"        data-f="ecosystem" data-v="marine"      onclick="setFilter(this)">Marien</div>
+      <div class="filter-item"        data-f="ecosystem" data-v="estuarine"   onclick="setFilter(this)">Estuarijn</div>
+      <div class="filter-item"        data-f="ecosystem" data-v="freshwater"  onclick="setFilter(this)">Zoetwater</div>
+      <div class="filter-item"        data-f="ecosystem" data-v="terrestrial" onclick="setFilter(this)">Terrestrisch</div>
+      <h4>Marker</h4>
+      <div id="sidebar-marker-items"></div>
+    </div>
+
+    <div class="main">
+      <div class="main-header">
+        <h2>Studies</h2>
+        <span class="result-count" id="result-count"></span>
+        <button id="params-toggle" onclick="toggleParamsFilter()"
+          style="font-size:12px;padding:6px 12px;border-radius:20px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;white-space:nowrap;">
+          Alle studies
+        </button>
+        <select class="sort" onchange="sortBy(this.value)">
+          <option value="year">Nieuwste eerst</option>
+          <option value="asvs">Meeste ASVs</option>
+        </select>
+      </div>
+      <input class="search-input" id="q" type="text" placeholder="Zoek op titel, auteur, primer..." oninput="renderStudies()" />
+      <div id="studies-list"><div class="state-msg"><div class="spinner"></div><br>Laden...</div></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════
+     KAART
+══════════════════════════════════════════════════════════ -->
+<div class="page" id="page-map">
+  <div class="map-wrap">
+    <div class="map-bar">
+      <h2>Studielocaties</h2>
+      <span class="count" id="map-count"></span>
+      <div class="legend">
+        <div class="leg"><div class="leg-dot" style="background:#1D9E75"></div>Marien</div>
+        <div class="leg"><div class="leg-dot" style="background:#185FA5"></div>Zoetwater</div>
+        <div class="leg"><div class="leg-dot" style="background:#854F0B"></div>Estuarijn</div>
+        <div class="leg"><div class="leg-dot" style="background:#888780"></div>Terrestrisch</div>
+      </div>
+    </div>
+    <div id="map"></div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════
+     VERGELIJKINGSTOOL
+══════════════════════════════════════════════════════════ -->
+<div class="page" id="page-compare">
+  <div class="compare-wrap">
+    <h2>Parameters vergelijken</h2>
+    <p class="sub">Statistische verdeling van pipeline-instellingen over gefilterde studies.</p>
+    <div class="filter-row">
+      <div class="field"><label>Pipeline</label>
+        <select id="cmp-pipeline" onchange="renderCompare()"><option>DADA2</option><option>VSEARCH</option></select>
+      </div>
+      <div class="field"><label>Genregio</label>
+        <select id="cmp-marker" onchange="renderCompare()">
+          <option value="all">Alle markers</option>
+          <option value="12S">12S rRNA</option>
+          <option value="COI">COI</option>
+          <option value="18S">18S rRNA</option>
+        </select>
+      </div>
+      <div class="field"><label>Ecosysteem</label>
+        <select id="cmp-ecosystem" onchange="renderCompare()">
+          <option value="all">Alle ecosystemen</option>
+          <option value="marine">Marien</option>
+          <option value="estuarine">Estuarijn</option>
+          <option value="freshwater">Zoetwater</option>
+        </select>
+      </div>
+    </div>
+    <div class="stats-wrap">
+      <div class="stats-meta" id="cmp-meta"></div>
+      <!-- Scrollwrapper zodat tabel niet afgekneden wordt op mobiel -->
+      <div class="table-scroll">
+        <table class="stats-table">
+          <thead><tr>
+            <th>Parameter</th><th>Gemiddelde</th><th>Mediaan</th>
+            <th>Min</th><th>Max</th><th>Meest gebruikt</th>
+          </tr></thead>
+          <tbody id="cmp-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// CONFIGURATIE
+// ═══════════════════════════════════════════════════════════
+const SUPABASE_URL = 'https://amwrzmujwgidnfzdikvm.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFtd3J6bXVqd2dpZG5memRpa3ZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5ODk4MjgsImV4cCI6MjA4OTU2NTgyOH0.lxV71ExHyO0XevC6Ef629zZKfVbpj-RxQlsGxGmwjFA';
+
+
+async function dbFetch(view, params = '') {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${view}?${params}`, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+  });
+  if (!res.ok) throw new Error(`Database fout: ${res.status}`);
+  return res.json();
+}
+
+async function dbPost(table, body) {
+  return fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify(body)
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// HAMBURGER MENU
+// ═══════════════════════════════════════════════════════════
+function toggleMenu() {
+  const open = document.getElementById('mobile-menu').classList.toggle('open');
+  document.getElementById('hamburger').classList.toggle('open', open);
+  document.getElementById('overlay').classList.toggle('open', open);
+  // Scrolling blokkeren als menu open is
+  document.body.style.overflow = open ? 'hidden' : '';
+}
+
+function closeMenu() {
+  document.getElementById('mobile-menu').classList.remove('open');
+  document.getElementById('hamburger').classList.remove('open');
+  document.getElementById('overlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+// ═══════════════════════════════════════════════════════════
+// BEZOEKERSTELLER
+// ═══════════════════════════════════════════════════════════
+async function registerVisit() {
+  try {
+    await dbPost('visits', {});
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/visits?select=id`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'count=exact' }
+    });
+    const total = res.headers.get('content-range')?.split('/')[1];
+    if (total) {
+      const formatted = parseInt(total).toLocaleString('nl-NL');
+      document.getElementById('visit-count').textContent = formatted;
+      document.getElementById('visit-count-mobile').textContent = formatted;
+    }
+  } catch (e) {
+    document.getElementById('visit-count').textContent = '—';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// DARK MODE
+// ═══════════════════════════════════════════════════════════
+function toggleTheme() {
+  const isDark   = document.documentElement.getAttribute('data-theme') === 'dark';
+  const newTheme = isDark ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', newTheme);
+  document.getElementById('theme-btn').textContent = isDark ? '🌙' : '☀️';
+  localStorage.setItem('ednahub-theme', newTheme);
+  if (mapInstance) swapMapTiles(newTheme);
+}
+
+function applyStoredTheme() {
+  const theme = localStorage.getItem('ednahub-theme') || 'light';
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('theme-btn').textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+
+// ═══════════════════════════════════════════════════════════
+// KAART
+// ═══════════════════════════════════════════════════════════
+let mapInstance = null;
+let tileLayer   = null;
+const ECO_COLOR = { marine:'#1D9E75', freshwater:'#185FA5', estuarine:'#854F0B', terrestrial:'#888780' };
+
+function initMap() {
+  if (mapInstance) return;
+  mapInstance = L.map('map').setView([20, 10], 2);
+  addTiles(document.documentElement.getAttribute('data-theme'));
+
+  // Gebruik opgeslagen coördinaten uit de database — direct beschikbaar
+  const withCoords = studies.filter(s => s.coordinates_lat && s.coordinates_lon);
+  document.getElementById('map-count').textContent =
+    `${withCoords.length} van ${studies.length} studies met locatie`;
+
+  withCoords.forEach(s => {
+    const color = ECO_COLOR[s.ecosystem] || '#888780';
+    const icon  = L.divIcon({
+      className: '',
+      html: `<div style="width:12px;height:12px;border-radius:50%;background:${color};border:2px solid rgba(255,255,255,0.9);box-shadow:0 1px 4px rgba(0,0,0,0.25);"></div>`,
+      iconSize:[12,12], iconAnchor:[6,6],
+    });
+    const pipeline = (s.pipelines||[]).join(', ') || '—';
+    const params   = s.trunclen_f ? `truncLen ${s.trunclen_f}/${s.trunclen_r} · maxEE ${s.maxee_f}/${s.maxee_r}` : '';
+    const doiLink  = s.doi ? `<a href="https://doi.org/${s.doi}" target="_blank" class="popup-doi">Bekijk paper →</a>` : '';
+
+    // Kleine jitter zodat papers op dezelfde locatie niet overlappen
+    const jitter = () => (Math.random() - 0.5) * 0.8;
+    L.marker([s.coordinates_lat + jitter(), s.coordinates_lon + jitter()], { icon })
+      .addTo(mapInstance)
+      .bindPopup(
+        `<div class="popup-title">${s.title}</div>` +
+        `<div class="popup-meta">${(s.authors||[]).slice(0,2).join(', ')} (${s.year||'?'})</div>` +
+        `<div class="popup-params">${pipeline}${params?' · '+params:''}</div>` +
+        `<div class="popup-params">${s.region||''}</div>` +
+        doiLink,
+        { maxWidth:260 }
+      );
+  });
+}
+
+function addTiles(theme) {
+  const url  = theme === 'dark' ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+  const attr = theme === 'dark' ? '© <a href="https://carto.com/">CARTO</a>' : '© <a href="https://www.openstreetmap.org/">OpenStreetMap</a>';
+  tileLayer  = L.tileLayer(url, { attribution:attr, maxZoom:18 }).addTo(mapInstance);
+}
+
+function swapMapTiles(theme) {
+  if (tileLayer) tileLayer.remove();
+  addTiles(theme);
+}
+
+// ═══════════════════════════════════════════════════════════
+// DATA LADEN
+// ═══════════════════════════════════════════════════════════
+let studies = [];
+let filters = { pipeline:'all', ecosystem:'all', marker:'all' };
+let showOnlyWithParams = false;
+
+function toggleParamsFilter() {
+  showOnlyWithParams = !showOnlyWithParams;
+  const btn = document.getElementById('params-toggle');
+  if (showOnlyWithParams) {
+    btn.textContent = 'Met parameters';
+    btn.style.background = 'var(--teal-50)';
+    btn.style.color = 'var(--teal-800)';
+    btn.style.borderColor = 'var(--teal-400)';
+  } else {
+    btn.textContent = 'Alle studies';
+    btn.style.background = 'var(--surface)';
+    btn.style.color = 'var(--muted)';
+    btn.style.borderColor = 'var(--border)';
+  }
+  renderStudies();
+}
+
+async function loadStudies() {
+  try {
+    studies = await dbFetch('studies_with_runs', 'order=year.desc');
+    updateStats();
+    updateCounts();
+    renderStudies();
+  } catch (e) {
+    document.getElementById('studies-list').innerHTML =
+      `<div class="state-msg">Kon data niet laden.<br><small>${e.message}</small></div>`;
+  }
+}
+
+function updateStats() {
+  document.getElementById('stat-studies').textContent = studies.length;
+  document.getElementById('stat-params').textContent  = studies.filter(s=>s.has_parameters).length;
+  const regions = new Set(studies.map(s=>s.region).filter(Boolean));
+  document.getElementById('stat-regions').textContent = regions.size;
+}
+
+// Pijplijnkleuren — uitbreidbaar met nieuwe pipelines
+const PIPELINE_COLORS = {
+  DADA2:'var(--teal-400)', VSEARCH:'var(--blue-600)',
+  ANACAPA:'var(--amber-600)', QIIME2:'var(--teal-600)',
+  OBITools:'var(--gray-400)'
+};
+
+function pipelineColor(p) {
+  return PIPELINE_COLORS[p] || 'var(--gray-400)';
+}
+
+function pipelineClass(p) {
+  return ({DADA2:'dada2',VSEARCH:'vsearch',ANACAPA:'anacapa'}[p]||'marker');
+}
+
+function updateCounts() {
+  // Verzamel alle unieke waarden uit de geladen studies
+  const pipelines = [...new Set(studies.flatMap(s=>s.pipelines||[]).filter(Boolean))].sort();
+  const markers   = [...new Set(studies.flatMap(s=>s.markers||[]).filter(Boolean))].sort();
+
+  // ── Desktop sidebar: pipeline sectie dynamisch opbouwen ──
+  const sidebarPipelineItems = document.getElementById('sidebar-pipeline-items');
+  if (sidebarPipelineItems) {
+    const active = filters.pipeline;
+    sidebarPipelineItems.innerHTML =
+      `<div class="filter-item ${active==='all'?'active':''}" data-f="pipeline" data-v="all" onclick="setFilter(this)">
+        <span class="dot" style="background:var(--gray-400)"></span>Alle
+        <span class="fcount">${studies.length}</span>
+      </div>` +
+      pipelines.map(p => {
+        const count = studies.filter(s=>(s.pipelines||[]).includes(p)).length;
+        return `<div class="filter-item ${active===p?'active':''}" data-f="pipeline" data-v="${p}" onclick="setFilter(this)">
+          <span class="dot" style="background:${pipelineColor(p)}"></span>${p}
+          <span class="fcount">${count}</span>
+        </div>`;
+      }).join('');
+  }
+
+  // ── Desktop sidebar: marker sectie dynamisch opbouwen ────
+  const sidebarMarkerItems = document.getElementById('sidebar-marker-items');
+  if (sidebarMarkerItems) {
+    const active = filters.marker;
+    sidebarMarkerItems.innerHTML =
+      `<div class="filter-item ${active==='all'?'active':''}" data-f="marker" data-v="all" onclick="setFilter(this)">Alle</div>` +
+      markers.map(m =>
+        `<div class="filter-item ${active===m?'active':''}" data-f="marker" data-v="${m}" onclick="setFilter(this)">${m}</div>`
+      ).join('');
+  }
+
+  // ── Mobiele chips: pipeline ───────────────────────────────
+  const mobileFilters = document.getElementById('mobile-filters');
+  if (mobileFilters) {
+    const activePipeline  = filters.pipeline;
+    const activeEcosystem = filters.ecosystem;
+    const activeMarker    = filters.marker;
+
+    const pipelineChips = [
+      `<span class="filter-chip ${activePipeline==='all'?'active':''}" data-f="pipeline" data-v="all" onclick="setMobileFilter(this)">Alle</span>`,
+      ...pipelines.map(p =>
+        `<span class="filter-chip ${activePipeline===p?'active':''}" data-f="pipeline" data-v="${p}" onclick="setMobileFilter(this)">${p}</span>`
+      )
+    ].join('');
+
+    const sep = '<span style="width:1px;background:var(--border);flex-shrink:0;margin:0 4px;"></span>';
+
+    const ecoChips = [
+      `<span class="filter-chip ${activeEcosystem==='all'?'active':''}" data-f="ecosystem" data-v="all" onclick="setMobileFilter(this)">Alle ecosystemen</span>`,
+      `<span class="filter-chip ${activeEcosystem==='marine'?'active':''}" data-f="ecosystem" data-v="marine" onclick="setMobileFilter(this)">Marien</span>`,
+      `<span class="filter-chip ${activeEcosystem==='estuarine'?'active':''}" data-f="ecosystem" data-v="estuarine" onclick="setMobileFilter(this)">Estuarijn</span>`,
+      `<span class="filter-chip ${activeEcosystem==='freshwater'?'active':''}" data-f="ecosystem" data-v="freshwater" onclick="setMobileFilter(this)">Zoetwater</span>`,
+    ].join('');
+
+    const markerChips = [
+      sep,
+      `<span class="filter-chip ${activeMarker==='all'?'active':''}" data-f="marker" data-v="all" onclick="setMobileFilter(this)">Alle markers</span>`,
+      ...markers.map(m =>
+        `<span class="filter-chip ${activeMarker===m?'active':''}" data-f="marker" data-v="${m}" onclick="setMobileFilter(this)">${m}</span>`
+      )
+    ].join('');
+
+    mobileFilters.innerHTML = pipelineChips + sep + ecoChips + markerChips;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// FILTEREN — desktop sidebar en mobiele chips
+// ═══════════════════════════════════════════════════════════
+function getFiltered() {
+  const q = (document.getElementById('q')?.value||'').toLowerCase();
+  return studies.filter(s => {
+    if (showOnlyWithParams && !s.has_parameters)                                        return false;
+    if (filters.pipeline  !== 'all' && !(s.pipelines||[]).includes(filters.pipeline))  return false;
+    if (filters.ecosystem !== 'all' && s.ecosystem !== filters.ecosystem)               return false;
+    if (filters.marker    !== 'all' && !(s.markers||[]).includes(filters.marker))       return false;
+    if (q && !`${s.title} ${(s.authors||[]).join(' ')} ${(s.primers||[]).join(' ')}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+// Desktop sidebar filter
+function setFilter(el) {
+  const type = el.dataset.f, val = el.dataset.v;
+  filters[type] = val;
+  document.querySelectorAll(`[data-f="${type}"]`).forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  renderStudies();
+}
+
+// Mobiele chip filter — werkt hetzelfde maar update ook desktop sidebar
+function setMobileFilter(el) {
+  const type = el.dataset.f, val = el.dataset.v;
+  filters[type] = val;
+  // Update mobiele chips
+  document.querySelectorAll(`#mobile-filters [data-f="${type}"]`).forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  // Sync met desktop sidebar
+  document.querySelectorAll(`.sidebar [data-f="${type}"]`).forEach(e => {
+    e.classList.toggle('active', e.dataset.v === val);
+  });
+  renderStudies();
+}
+
+function renderStudies() {
+  const list = getFiltered();
+  document.getElementById('result-count').textContent = `${list.length} resultaten`;
+  const el = document.getElementById('studies-list');
+
+  if (!list.length) {
+    el.innerHTML = '<div class="state-msg">Geen studies gevonden voor deze filters.</div>';
+    return;
+  }
+
+  el.innerHTML = list.map(s => `
+    <div class="study-card">
+      <div class="card-top">
+        <div class="card-meta">
+          <div class="card-title">${s.title}</div>
+          <div class="card-authors">${(s.authors||[]).slice(0,2).join(', ')} (${s.year||'?'}) · ${s.journal||'?'}</div>
+        </div>
+        <div class="card-badges">
+          ${(s.pipelines||[]).map(p=>`<span class="pill pill-${pipelineClass(p)}">${p}</span>`).join('')}
+          ${(s.markers||[]).map(m=>`<span class="pill pill-marker">${m}</span>`).join('')}
+        </div>
+      </div>
+      ${s.trunclen_f ? `
+      <div class="params-scroll"><div class="params">
+        <div class="param"><span class="param-label">truncLen F</span><span class="param-val">${s.trunclen_f}</span></div>
+        <div class="param"><span class="param-label">truncLen R</span><span class="param-val">${s.trunclen_r||'—'}</span></div>
+        <div class="param"><span class="param-label">maxEE F/R</span><span class="param-val">${s.maxee_f||'—'}/${s.maxee_r||'—'}</span></div>
+        <div class="param"><span class="param-label">database</span><span class="param-val">${s.ref_database||'—'}</span></div>
+        ${s.total_asvs?`<div class="param"><span class="param-label">ASVs</span><span class="param-val">${s.total_asvs.toLocaleString()}</span></div>`:''}
+      </div></div>` : ''}
+      <div class="card-tags">
+        ${s.ecosystem?`<span class="tag tag-eco">${s.ecosystem}</span>`:''}
+        ${(s.markers||[]).filter(Boolean).map(m=>`<span class="tag tag-marker">${m}</span>`).join('')}
+        ${s.region?`<span class="tag tag-region">${s.region}</span>`:''}
+        ${s.doi?`<a href="https://doi.org/${s.doi}" target="_blank" class="tag tag-doi">DOI →</a>`:''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function sortBy(key) {
+  studies.sort((a,b) => key==='asvs' ? (b.total_asvs||0)-(a.total_asvs||0) : (b.year||0)-(a.year||0));
+  renderStudies();
+}
+
+function doSearch() {
+  const q = document.getElementById('hero-q').value;
+  if (q) document.getElementById('q').value = q;
+  showPage('studies');
+}
+
+// ═══════════════════════════════════════════════════════════
+// VERGELIJKINGSTOOL
+// ═══════════════════════════════════════════════════════════
+function renderCompare() {
+  const pipeline  = document.getElementById('cmp-pipeline').value;
+  const marker    = document.getElementById('cmp-marker').value;
+  const ecosystem = document.getElementById('cmp-ecosystem').value;
+  let sub = studies.filter(s=>(s.pipelines||[]).includes(pipeline));
+  if (marker    !== 'all') sub = sub.filter(s=>(s.markers||[]).includes(marker));
+  if (ecosystem !== 'all') sub = sub.filter(s=>s.ecosystem===ecosystem);
+
+  document.getElementById('cmp-meta').textContent =
+    `${sub.length} studies · ${pipeline} · ${marker==='all'?'alle markers':marker} · ${ecosystem==='all'?'alle ecosystemen':ecosystem}`;
+
+  if (!sub.length) {
+    document.getElementById('cmp-body').innerHTML =
+      '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--muted)">Geen studies voor deze combinatie.</td></tr>';
+    return;
+  }
+  function stats(arr) {
+    const v=arr.filter(x=>x!==null&&!isNaN(x));
+    if(!v.length) return null;
+    const s=[...v].sort((a,b)=>a-b);
+    return {avg:(v.reduce((a,b)=>a+b,0)/v.length).toFixed(1),median:s[Math.floor(s.length/2)],min:s[0],max:s[s.length-1]};
+  }
+  function mode(arr) {
+    const f={};arr.filter(Boolean).forEach(v=>{f[v]=(f[v]||0)+1;});
+    return Object.entries(f).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
+  }
+  const rows=[
+    {name:'truncLen Forward',   vals:sub.map(s=>s.trunclen_f), mode:mode(sub.map(s=>s.trunclen_f))},
+    {name:'truncLen Reverse',   vals:sub.map(s=>s.trunclen_r), mode:mode(sub.map(s=>s.trunclen_r))},
+    {name:'maxEE Forward',      vals:sub.map(s=>s.maxee_f),    mode:mode(sub.map(s=>s.maxee_f))},
+    {name:'maxEE Reverse',      vals:sub.map(s=>s.maxee_r),    mode:mode(sub.map(s=>s.maxee_r))},
+    {name:'Referentiedatabase', vals:null,                      mode:mode(sub.map(s=>s.ref_database))},
+  ];
+  document.getElementById('cmp-body').innerHTML = rows.map(r=>{
+    const st=r.vals?stats(r.vals):null;
+    return `<tr><td class="td-name">${r.name}</td><td>${st?`<span class="avg-badge">${st.avg}</span>`:'—'}</td><td class="td-val">${st?st.median:'—'}</td><td>${st?st.min:'—'}</td><td>${st?st.max:'—'}</td><td class="td-val">${r.mode}</td></tr>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════
+// NAVIGATIE
+// ═══════════════════════════════════════════════════════════
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById(`page-${id}`).classList.add('active');
+  document.querySelectorAll('.nav-link').forEach(l=>l.classList.toggle('active', l.dataset.page===id));
+  if (id==='map')     initMap();
+  if (id==='compare') renderCompare();
+  // Scroll terug naar boven bij paginawissel op mobiel
+  window.scrollTo(0, 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// OPSTARTEN
+// ═══════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  applyStoredTheme();
+  registerVisit();
+  loadStudies();
+});
+</script>
+</body>
+</html>
